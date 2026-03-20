@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arbre de décision – Widget Grist</title>
+
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
+
+<style>
+  :root {
+    --bg: #f5f4f0;
+    --surface: #ffffff;
+    --border: #e0deda;
+    --text: #1a1916;
+    --text-muted: #7a7870;
+    --accent: #3a5bd9;
+    --accent-light: #eef1fc;
+    --node-decision: #d97b2a;
+    --node-action: #3a5bd9;
+    --node-start: #2a9d6e;
+    --node-end: #c0392b;
+    --node-default: #555;
+    --shadow: 0 2px 12px rgba(0,0,0,0.08);
+    --radius: 10px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── TOOLBAR ── */
+  #toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+
+  #toolbar .title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-right: 4px;
+  }
+
+  .tb-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+
+  .tb-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+    white-space: nowrap;
+  }
+  .tb-btn:hover { background: var(--bg); border-color: #bbb; }
+  .tb-btn.active { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
+  .tb-btn svg { flex-shrink: 0; }
+
+  #diagram-select {
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  /* ── MAIN AREA ── */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* ── GRAPH ── */
+  #cy {
+    flex: 1;
+    background: var(--bg);
+    background-image: radial-gradient(circle, #ccc8bf 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  /* ── SIDE PANEL ── */
+  #panel {
+    width: 260px;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    flex-shrink: 0;
+    transition: width .2s;
+  }
+  #panel.hidden { width: 0; overflow: hidden; }
+
+  .panel-section {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-section h3 {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+  }
+
+  .node-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .node-badge.start  { background: #e6f8f1; color: var(--node-start); }
+  .node-badge.decision { background: #fdf3e7; color: var(--node-decision); }
+  .node-badge.action { background: #eef1fc; color: var(--node-action); }
+  .node-badge.end    { background: #fdecea; color: var(--node-end); }
+
+  #node-label {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.4;
+    margin-bottom: 6px;
+  }
+  #node-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+
+  .edge-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .edge-item:last-child { border-bottom: none; }
+  .edge-item:hover .edge-label { color: var(--accent); }
+  .edge-arrow { font-size: 16px; color: var(--text-muted); }
+  .edge-label { font-size: 12px; font-weight: 500; }
+  .edge-target { font-size: 11px; color: var(--text-muted); flex: 1; text-align: right; }
+
+  /* ── MODE WIZARD ── */
+  #wizard-overlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(245,244,240,0.92);
+    backdrop-filter: blur(4px);
+    z-index: 10;
+    padding: 24px;
+  }
+  #wizard-overlay.visible { display: flex; }
+
+  .wizard-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 32px;
+    max-width: 480px;
+    width: 100%;
+    box-shadow: var(--shadow);
+  }
+
+  .wizard-type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    margin-bottom: 16px;
+  }
+
+  .wizard-card h2 {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    line-height: 1.3;
+  }
+  .wizard-card p {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin-bottom: 24px;
+    line-height: 1.6;
+  }
+
+  .wizard-choices {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .wizard-btn {
+    padding: 12px 16px;
+    border: 1.5px solid var(--border);
+    background: var(--surface);
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: left;
+    transition: all .15s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .wizard-btn:hover {
+    border-color: var(--accent);
+    background: var(--accent-light);
+    color: var(--accent);
+  }
+  .wizard-btn .wlabel {
+    font-weight: 600;
+    color: var(--accent);
+    min-width: 36px;
+    font-size: 12px;
+  }
+
+  .wizard-end {
+    text-align: center;
+    padding: 12px 0;
+  }
+  .wizard-end .result-icon {
+    font-size: 36px;
+    margin-bottom: 12px;
+  }
+
+  .wizard-nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .wizard-nav button {
+    padding: 7px 16px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    transition: background .15s;
+  }
+  .wizard-nav button:hover { background: var(--bg); }
+  .wizard-nav .step-count { font-size: 11px; color: var(--text-muted); }
+
+  /* ── LEGEND ── */
+  #legend {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    font-size: 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    box-shadow: var(--shadow);
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--text-muted);
+  }
+  .legend-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* ── EMPTY STATE ── */
+  #empty {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--text-muted);
+    gap: 10px;
+    font-size: 13px;
+  }
+  #empty.visible { display: flex; }
+  #empty svg { opacity: .35; margin-bottom: 4px; }
+
+  /* ── TOAST ── */
+  #toast {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-60px);
+    background: #222;
+    color: #fff;
+    padding: 7px 16px;
+    border-radius: 20px;
+    font-size: 12px;
+    transition: transform .25s ease;
+    z-index: 99;
+    white-space: nowrap;
+  }
+  #toast.show { transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<!-- TOOLBAR -->
+<div id="toolbar">
+  <span class="title">🔀 Logigramme</span>
+
+  <select id="diagram-select" title="Choisir un diagramme">
+    <option value="">— Tous les nœuds —</option>
+  </select>
+
+  <div class="tb-sep"></div>
+
+  <button class="tb-btn" id="btn-fit" title="Ajuster la vue">
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+      <rect x="1" y="1" width="5" height="5" rx="1"/><rect x="10" y="1" width="5" height="5" rx="1"/>
+      <rect x="1" y="10" width="5" height="5" rx="1"/><rect x="10" y="10" width="5" height="5" rx="1"/>
+    </svg>
+    Ajuster
+  </button>
+
+  <button class="tb-btn" id="btn-layout" title="Recalculer le layout">
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+      <path d="M8 2v3m0 6v3M2 8h3m6 0h3" stroke-linecap="round"/>
+      <circle cx="8" cy="8" r="2.5"/>
+    </svg>
+    Layout auto
+  </button>
+
+  <button class="tb-btn" id="btn-wizard" title="Mode navigation étape par étape">
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+      <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    Mode wizard
+  </button>
+
+  <div class="tb-sep"></div>
+
+  <button class="tb-btn" id="btn-panel" title="Panneau latéral">
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+      <rect x="1" y="1" width="14" height="14" rx="2"/>
+      <line x1="10" y1="1" x2="10" y2="15"/>
+    </svg>
+    Panneau
+  </button>
+</div>
+
+<!-- MAIN -->
+<div id="main">
+  <div id="cy"></div>
+
+  <!-- SIDE PANEL -->
+  <div id="panel">
+    <div class="panel-section">
+      <h3>Nœud sélectionné</h3>
+      <div id="node-badge-wrap"></div>
+      <div id="node-label">—</div>
+      <div id="node-desc"></div>
+    </div>
+    <div class="panel-section">
+      <h3>Transitions sortantes</h3>
+      <div id="edge-list"><span style="font-size:12px;color:var(--text-muted)">Aucune</span></div>
+    </div>
+  </div>
+
+  <!-- WIZARD OVERLAY -->
+  <div id="wizard-overlay">
+    <div class="wizard-card" id="wizard-card">
+      <div id="wizard-badge"></div>
+      <h2 id="wizard-title"></h2>
+      <p id="wizard-desc"></p>
+      <div id="wizard-choices" class="wizard-choices"></div>
+      <div class="wizard-nav">
+        <button id="wizard-back">← Précédent</button>
+        <span class="step-count" id="wizard-steps"></span>
+        <button id="wizard-close">✕ Fermer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- EMPTY STATE -->
+  <div id="empty" class="visible">
+    <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="#999" stroke-width="2">
+      <rect x="6" y="18" width="16" height="10" rx="3"/>
+      <rect x="26" y="6" width="16" height="10" rx="3"/>
+      <rect x="26" y="30" width="16" height="10" rx="3"/>
+      <line x1="22" y1="23" x2="26" y2="11" marker-end="url(#a)"/>
+      <line x1="22" y1="23" x2="26" y2="35" marker-end="url(#a)"/>
+      <defs><marker id="a" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="4" markerHeight="4" orient="auto">
+        <path d="M0 0l6 3-6 3z" fill="#999"/>
+      </marker></defs>
+    </svg>
+    <strong>En attente des données Grist</strong>
+    <span>Associez les tables <code>Nodes</code> et <code>Edges</code> depuis le panneau Widget.</span>
+  </div>
+
+  <!-- LEGEND -->
+  <div id="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:var(--node-start)"></div>Départ (start)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--node-decision)"></div>Décision</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--node-action)"></div>Action</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--node-end)"></div>Fin (end)</div>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toast"></div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+// INIT CYTOSCAPE
+// ─────────────────────────────────────────────
+cytoscape.use(cytoscapeDagre);
+
+let cy = cytoscape({
+  container: document.getElementById('cy'),
+  style: [
+    {
+      selector: 'node',
+      style: {
+        'label': 'data(label)',
+        'text-wrap': 'wrap',
+        'text-max-width': '120px',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'font-size': '12px',
+        'font-family': 'Segoe UI, system-ui, sans-serif',
+        'font-weight': '500',
+        'color': '#fff',
+        'background-color': 'data(bgColor)',
+        'border-width': 2,
+        'border-color': 'data(borderColor)',
+        'width': 130,
+        'height': 50,
+        'shape': 'data(shape)',
+        'transition-property': 'border-width, opacity',
+        'transition-duration': '0.15s',
+        'padding': '10px',
+      }
+    },
+    {
+      selector: 'node[type="decision"]',
+      style: {
+        'shape': 'diamond',
+        'width': 130,
+        'height': 80,
+        'font-size': '11px',
+      }
+    },
+    {
+      selector: 'node[type="start"]',
+      style: {
+        'shape': 'ellipse',
+        'width': 110,
+        'height': 44,
+      }
+    },
+    {
+      selector: 'node[type="end"]',
+      style: {
+        'shape': 'ellipse',
+        'width': 110,
+        'height': 44,
+        'border-width': 4,
+      }
+    },
+    {
+      selector: 'node:selected',
+      style: {
+        'border-width': 3,
+        'border-color': '#3a5bd9',
+        'border-style': 'solid',
+      }
+    },
+    {
+      selector: 'node.highlighted',
+      style: {
+        'border-width': 3,
+        'border-color': '#f0a500',
+      }
+    },
+    {
+      selector: 'node.dimmed',
+      style: { 'opacity': 0.25 }
+    },
+    {
+      selector: 'edge',
+      style: {
+        'label': 'data(label)',
+        'font-size': '11px',
+        'font-family': 'Segoe UI, system-ui, sans-serif',
+        'color': '#555',
+        'text-background-color': '#f5f4f0',
+        'text-background-opacity': 1,
+        'text-background-padding': '3px',
+        'text-border-radius': '3px',
+        'curve-style': 'bezier',
+        'target-arrow-shape': 'triangle',
+        'target-arrow-color': '#999',
+        'line-color': '#bbb',
+        'arrow-scale': 1.2,
+        'width': 1.5,
+      }
+    },
+    {
+      selector: 'edge:selected',
+      style: {
+        'line-color': '#3a5bd9',
+        'target-arrow-color': '#3a5bd9',
+      }
+    },
+    {
+      selector: 'edge.dimmed',
+      style: { 'opacity': 0.15 }
+    }
+  ],
+  layout: { name: 'preset' },
+  minZoom: 0.2,
+  maxZoom: 3,
+  wheelSensitivity: 0.3,
+});
+
+// ─────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────
+let allNodes = [];
+let allEdges = [];
+let nodesLoaded = false;
+let edgesLoaded = false;
+let panelVisible = true;
+let wizardHistory = [];
+let currentWizardNode = null;
+
+// Color helpers
+function nodeColor(type, custom) {
+  if (custom) return { bg: custom, border: custom };
+  switch (type) {
+    case 'start':    return { bg: '#2a9d6e', border: '#1f7d57' };
+    case 'decision': return { bg: '#d97b2a', border: '#b5631e' };
+    case 'end':      return { bg: '#c0392b', border: '#922c22' };
+    default:         return { bg: '#3a5bd9', border: '#2c48b0' };
+  }
+}
+
+function nodeShape(type) {
+  if (type === 'decision') return 'diamond';
+  if (type === 'start' || type === 'end') return 'ellipse';
+  return 'roundrectangle';
+}
+
+// ─────────────────────────────────────────────
+// BUILD GRAPH
+// ─────────────────────────────────────────────
+function buildGraph() {
+  if (!nodesLoaded) return;
+  cy.elements().remove();
+
+  const elements = [];
+
+  allNodes.forEach(n => {
+    const colors = nodeColor(n.type, n.color);
+    const hasPos = n.x_pos != null && n.y_pos != null && n.x_pos !== 0 && n.y_pos !== 0;
+    const el = {
+      data: {
+        id: String(n.id),
+        label: n.label || '(sans nom)',
+        type: n.type || 'action',
+        description: n.description || '',
+        bgColor: colors.bg,
+        borderColor: colors.border,
+        shape: nodeShape(n.type),
+        rowId: n.id,
+      }
+    };
+    if (hasPos) el.position = { x: n.x_pos, y: n.y_pos };
+    elements.push(el);
+  });
+
+  if (edgesLoaded) {
+    allEdges.forEach(e => {
+      const src = e.source_node;
+      const tgt = e.target_node;
+      if (!src || !tgt) return;
+      const srcId = String(typeof src === 'object' ? (src.id || src) : src);
+      const tgtId = String(typeof tgt === 'object' ? (tgt.id || tgt) : tgt);
+      elements.push({
+        data: {
+          id: `e_${e.id}`,
+          source: srcId,
+          target: tgtId,
+          label: e.label || '',
+          order: e.order || 0,
+        }
+      });
+    });
+  }
+
+  cy.add(elements);
+
+  // Auto layout if no positions
+  const hasPositions = allNodes.some(n => n.x_pos && n.x_pos !== 0);
+  if (!hasPositions) runLayout();
+  else cy.fit(undefined, 40);
+
+  const empty = document.getElementById('empty');
+  if (allNodes.length > 0) empty.classList.remove('visible');
+  else empty.classList.add('visible');
+
+  // Update diagram selector
+  updateDiagramSelector();
+}
+
+function runLayout() {
+  cy.layout({
+    name: 'dagre',
+    rankDir: 'TB',
+    nodeSep: 60,
+    edgeSep: 20,
+    rankSep: 80,
+    padding: 40,
+    animate: true,
+    animationDuration: 400,
+    fit: true,
+  }).run();
+}
+
+// ─────────────────────────────────────────────
+// DIAGRAM SELECTOR
+// ─────────────────────────────────────────────
+function updateDiagramSelector() {
+  const sel = document.getElementById('diagram-select');
+  // Get unique diagram_ids
+  const ids = [...new Set(allNodes.map(n => n.diagram_id).filter(Boolean))];
+  while (sel.options.length > 1) sel.remove(1);
+  ids.forEach(id => {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = 'Diagramme ' + id;
+    sel.appendChild(opt);
+  });
+}
+
+document.getElementById('diagram-select').addEventListener('change', function() {
+  const val = this.value;
+  if (!val) {
+    cy.elements().removeClass('dimmed');
+    return;
+  }
+  cy.nodes().forEach(n => {
+    const rowId = n.data('rowId');
+    const row = allNodes.find(r => r.id == rowId);
+    if (row && String(row.diagram_id) === val) {
+      n.removeClass('dimmed');
+    } else {
+      n.addClass('dimmed');
+    }
+  });
+  cy.edges().forEach(e => {
+    const src = e.source();
+    if (src.hasClass('dimmed')) e.addClass('dimmed');
+    else e.removeClass('dimmed');
+  });
+});
+
+// ─────────────────────────────────────────────
+// NODE CLICK → PANEL
+// ─────────────────────────────────────────────
+cy.on('tap', 'node', function(evt) {
+  const node = evt.target;
+  updatePanel(node);
+  // Highlight
+  cy.elements().removeClass('highlighted');
+  node.addClass('highlighted');
+  node.connectedEdges().addClass('highlighted');
+  // Notify Grist (selection)
+  const rowId = node.data('rowId');
+  if (rowId) {
+    try { grist.setCursorPos({ rowId }); } catch(e) {}
+  }
+});
+
+cy.on('tap', function(evt) {
+  if (evt.target === cy) {
+    cy.elements().removeClass('highlighted dimmed');
+    resetPanel();
+  }
+});
+
+function updatePanel(node) {
+  const type = node.data('type') || 'action';
+  const label = node.data('label');
+  const desc = node.data('description');
+
+  const badgeWrap = document.getElementById('node-badge-wrap');
+  const typeLabels = { start: 'Départ', decision: 'Décision', action: 'Action', end: 'Fin' };
+  badgeWrap.innerHTML = `<span class="node-badge ${type}">${typeLabels[type] || type}</span>`;
+
+  document.getElementById('node-label').textContent = label;
+  document.getElementById('node-desc').textContent = desc || '';
+
+  // Outgoing edges
+  const edgeList = document.getElementById('edge-list');
+  const outEdges = node.outgoers('edge');
+  if (outEdges.length === 0) {
+    edgeList.innerHTML = '<span style="font-size:12px;color:var(--text-muted)">Aucune transition</span>';
+  } else {
+    edgeList.innerHTML = '';
+    outEdges.forEach(edge => {
+      const tgt = edge.target();
+      const div = document.createElement('div');
+      div.className = 'edge-item';
+      div.innerHTML = `
+        <span class="edge-arrow">→</span>
+        <span class="edge-label">${edge.data('label') || '(sans étiquette)'}</span>
+        <span class="edge-target">${tgt.data('label')}</span>
+      `;
+      div.addEventListener('click', () => {
+        cy.elements().removeClass('highlighted');
+        tgt.addClass('highlighted');
+        cy.animate({ fit: { eles: tgt, padding: 80 }, duration: 300 });
+        updatePanel(tgt);
+      });
+      edgeList.appendChild(div);
+    });
+  }
+}
+
+function resetPanel() {
+  document.getElementById('node-badge-wrap').innerHTML = '';
+  document.getElementById('node-label').textContent = '—';
+  document.getElementById('node-desc').textContent = '';
+  document.getElementById('edge-list').innerHTML = '<span style="font-size:12px;color:var(--text-muted)">Aucune</span>';
+}
+
+// ─────────────────────────────────────────────
+// WIZARD MODE
+// ─────────────────────────────────────────────
+const overlay = document.getElementById('wizard-overlay');
+
+document.getElementById('btn-wizard').addEventListener('click', () => {
+  // Find start node
+  const startNode = cy.nodes().filter(n => n.data('type') === 'start').first();
+  if (!startNode || !startNode.length) {
+    showToast('Aucun nœud de type "start" trouvé.');
+    return;
+  }
+  wizardHistory = [];
+  startWizardNode(startNode);
+  overlay.classList.add('visible');
+});
+
+document.getElementById('wizard-close').addEventListener('click', () => {
+  overlay.classList.remove('visible');
+});
+
+document.getElementById('wizard-back').addEventListener('click', () => {
+  if (wizardHistory.length > 1) {
+    wizardHistory.pop();
+    const prev = wizardHistory[wizardHistory.length - 1];
+    wizardHistory.pop();
+    startWizardNode(prev);
+  }
+});
+
+function startWizardNode(node) {
+  wizardHistory.push(node);
+  currentWizardNode = node;
+
+  // Highlight in graph
+  cy.elements().removeClass('highlighted');
+  node.addClass('highlighted');
+  cy.animate({ fit: { eles: node, padding: 120 }, duration: 300 });
+
+  const type = node.data('type') || 'action';
+  const label = node.data('label') || '';
+  const desc = node.data('description') || '';
+
+  const typeLabels = { start: 'Départ', decision: 'Décision', action: 'Action', end: 'Fin ✓' };
+  const typeColors = {
+    start: 'background:#e6f8f1;color:var(--node-start)',
+    decision: 'background:#fdf3e7;color:var(--node-decision)',
+    action: 'background:#eef1fc;color:var(--node-action)',
+    end: 'background:#fdecea;color:var(--node-end)',
+  };
+
+  document.getElementById('wizard-badge').innerHTML =
+    `<span class="wizard-type-badge" style="${typeColors[type] || ''}">${typeLabels[type] || type}</span>`;
+  document.getElementById('wizard-title').textContent = label;
+  document.getElementById('wizard-desc').textContent = desc;
+  document.getElementById('wizard-steps').textContent = `Étape ${wizardHistory.length}`;
+  document.getElementById('wizard-back').disabled = wizardHistory.length <= 1;
+
+  const choices = document.getElementById('wizard-choices');
+  choices.innerHTML = '';
+
+  const outEdges = node.outgoers('edge').sort((a, b) => (a.data('order') || 0) - (b.data('order') || 0));
+
+  if (type === 'end' || outEdges.length === 0) {
+    choices.innerHTML = `
+      <div class="wizard-end">
+        <div class="result-icon">✅</div>
+        <strong>Fin du parcours</strong>
+        <p style="font-size:13px;color:var(--text-muted);margin-top:6px">Vous avez atteint un résultat final.</p>
+      </div>`;
+  } else {
+    outEdges.forEach(edge => {
+      const tgt = edge.target();
+      const btn = document.createElement('button');
+      btn.className = 'wizard-btn';
+      const edgeLabel = edge.data('label') || '';
+      const tgtLabel = tgt.data('label') || '';
+      btn.innerHTML = edgeLabel
+        ? `<span class="wlabel">${edgeLabel}</span><span>${tgtLabel}</span>`
+        : `<span>→</span><span>${tgtLabel}</span>`;
+      btn.addEventListener('click', () => startWizardNode(tgt));
+      choices.appendChild(btn);
+    });
+  }
+}
+
+// ─────────────────────────────────────────────
+// TOOLBAR ACTIONS
+// ─────────────────────────────────────────────
+document.getElementById('btn-fit').addEventListener('click', () => {
+  cy.animate({ fit: { padding: 40 }, duration: 300 });
+});
+
+document.getElementById('btn-layout').addEventListener('click', () => {
+  runLayout();
+  showToast('Layout recalculé');
+});
+
+document.getElementById('btn-panel').addEventListener('click', () => {
+  panelVisible = !panelVisible;
+  document.getElementById('panel').classList.toggle('hidden', !panelVisible);
+  document.getElementById('btn-panel').classList.toggle('active', panelVisible);
+});
+
+// ─────────────────────────────────────────────
+// TOAST
+// ─────────────────────────────────────────────
+let toastTimeout;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ─────────────────────────────────────────────
+// GRIST INTEGRATION
+// ─────────────────────────────────────────────
+grist.ready({
+  requiredAccess: 'read table',
+  columns: [
+    // Nodes columns
+    { name: 'Nodes_id',          title: 'ID nœud',       type: 'Int',    optional: false },
+    { name: 'Nodes_label',       title: 'Label',          type: 'Text',   optional: false },
+    { name: 'Nodes_type',        title: 'Type',           type: 'Choice', optional: true  },
+    { name: 'Nodes_description', title: 'Description',    type: 'Text',   optional: true  },
+    { name: 'Nodes_color',       title: 'Couleur (hex)',  type: 'Text',   optional: true  },
+    { name: 'Nodes_x_pos',       title: 'Position X',     type: 'Numeric',optional: true  },
+    { name: 'Nodes_y_pos',       title: 'Position Y',     type: 'Numeric',optional: true  },
+    { name: 'Nodes_diagram_id',  title: 'Diagramme ID',  type: 'Int',    optional: true  },
+    // Edges columns (mapped from a second table via linked widget or separate mapping)
+    { name: 'Edges_id',          title: 'ID lien',        type: 'Int',    optional: true  },
+    { name: 'Edges_source',      title: 'Source (ID)',    type: 'Int',    optional: true  },
+    { name: 'Edges_target',      title: 'Cible (ID)',     type: 'Int',    optional: true  },
+    { name: 'Edges_label',       title: 'Étiquette',      type: 'Text',   optional: true  },
+    { name: 'Edges_order',       title: 'Ordre',          type: 'Numeric',optional: true  },
+  ]
+});
+
+// Primary table: Nodes
+grist.onRecords(function(records, mappings) {
+  if (!records || records.length === 0) return;
+
+  // Detect if this is Nodes or Edges by checking column names
+  const sample = records[0];
+
+  if ('Nodes_id' in sample || 'label' in sample || 'type' in sample) {
+    // Nodes table
+    allNodes = records.map(r => ({
+      id:          r.Nodes_id       || r.id,
+      label:       r.Nodes_label    || r.label       || '',
+      type:        r.Nodes_type     || r.type        || 'action',
+      description: r.Nodes_description || r.description || '',
+      color:       r.Nodes_color    || r.color       || null,
+      x_pos:       r.Nodes_x_pos    || r.x_pos       || null,
+      y_pos:       r.Nodes_y_pos    || r.y_pos       || null,
+      diagram_id:  r.Nodes_diagram_id || r.diagram_id || null,
+    }));
+    nodesLoaded = true;
+    buildGraph();
+  }
+});
+
+// Allow separate Edges table via grist.onRecords on a linked section
+// Users can add a second widget linked to Edges table
+grist.on('message', function(msg) {
+  if (msg && msg.type === 'edges' && Array.isArray(msg.records)) {
+    allEdges = msg.records.map(r => ({
+      id:          r.id,
+      source_node: r.source_node || r.Edges_source,
+      target_node: r.target_node || r.Edges_target,
+      label:       r.label       || r.Edges_label || '',
+      order:       r.order       || r.Edges_order || 0,
+    }));
+    edgesLoaded = true;
+    buildGraph();
+  }
+});
+
+// Cursor sync: when a row is selected in the Grist table, highlight that node
+grist.onRecord(function(record) {
+  if (!record) return;
+  const id = String(record.id || record.Nodes_id || '');
+  if (!id) return;
+  const node = cy.getElementById(id);
+  if (node && node.length) {
+    cy.elements().removeClass('highlighted');
+    node.addClass('highlighted');
+    cy.animate({ fit: { eles: node, padding: 120 }, duration: 300 });
+    updatePanel(node);
+  }
+});
+
+// DEMO data if no Grist connection (remove in production)
+setTimeout(() => {
+  if (!nodesLoaded) {
+    console.log('Mode démo : chargement de données exemple');
+    allNodes = [
+      { id: 1, label: 'Début', type: 'start', description: 'Point d\'entrée du processus', color: null, x_pos: null, y_pos: null },
+      { id: 2, label: 'Le client a un compte ?', type: 'decision', description: 'Vérifier si le client est déjà enregistré dans le système.', color: null, x_pos: null, y_pos: null },
+      { id: 3, label: 'Créer un compte', type: 'action', description: 'Redirigier vers le formulaire d\'inscription.', color: null, x_pos: null, y_pos: null },
+      { id: 4, label: 'Vérifier l\'identité', type: 'action', description: 'Demander les informations de connexion.', color: null, x_pos: null, y_pos: null },
+      { id: 5, label: 'Demande éligible ?', type: 'decision', description: 'Contrôle des critères d\'éligibilité.', color: null, x_pos: null, y_pos: null },
+      { id: 6, label: 'Traiter la demande', type: 'action', description: 'Lancer le workflow de traitement.', color: null, x_pos: null, y_pos: null },
+      { id: 7, label: 'Refus & notification', type: 'action', description: 'Envoyer un email de refus avec motif.', color: null, x_pos: null, y_pos: null },
+      { id: 8, label: 'Fin – Succès ✓', type: 'end', description: 'La demande a été traitée avec succès.', color: null, x_pos: null, y_pos: null },
+      { id: 9, label: 'Fin – Refus ✗', type: 'end', description: 'La demande a été rejetée.', color: '#c0392b', x_pos: null, y_pos: null },
+    ];
+    allEdges = [
+      { id: 1, source_node: 1, target_node: 2, label: '', order: 0 },
+      { id: 2, source_node: 2, target_node: 3, label: 'Non', order: 0 },
+      { id: 3, source_node: 2, target_node: 4, label: 'Oui', order: 1 },
+      { id: 4, source_node: 3, target_node: 4, label: '', order: 0 },
+      { id: 5, source_node: 4, target_node: 5, label: '', order: 0 },
+      { id: 6, source_node: 5, target_node: 6, label: 'Oui', order: 0 },
+      { id: 7, source_node: 5, target_node: 7, label: 'Non', order: 1 },
+      { id: 8, source_node: 6, target_node: 8, label: '', order: 0 },
+      { id: 9, source_node: 7, target_node: 9, label: '', order: 0 },
+    ];
+    nodesLoaded = true;
+    edgesLoaded = true;
+    buildGraph();
+    showToast('Mode démo – connectez vos tables Grist');
+  }
+}, 2500);
+</script>
+</body>
+</html>
